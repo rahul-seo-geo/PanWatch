@@ -122,6 +122,7 @@ class Position(Base):
     cost_price = Column(Float, nullable=False)  # 成本价
     quantity = Column(Float, nullable=False)  # 持仓数量(支持小数:DRP/微投碎片份额)
     invested_amount = Column(Float, nullable=True)  # 投入资金（用于盘中监控）
+    currency = Column(String, nullable=True)  # 成本币种;非 Ghostfolio 持仓为 NULL
     sort_order = Column(Integer, default=0)
     trading_style = Column(
         String, default="swing"
