@@ -47,6 +47,10 @@ def validate_condition_group(group: dict[str, Any]) -> dict[str, Any]:
         if operator not in ALERT_CONDITION_OPERATORS:
             raise ValueError(f"不支持的运算符: {operator}")
         value = item.get("value")
+        if operator not in {"between", "in"} and isinstance(value, list):
+            if len(value) != 1:
+                raise ValueError(f"{condition_type} 的 {operator} 需要单个数值")
+            value = value[0]
         if operator in {"between", "in"} and (
             not isinstance(value, list) or len(value) != 2
         ):
