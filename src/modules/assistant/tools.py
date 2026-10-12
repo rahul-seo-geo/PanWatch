@@ -474,12 +474,66 @@ def build_panwatch_tool_registry(session: Session) -> ToolRegistry:
             return ToolResult.failure(
                 summary="搜索条数必须是数字。", error_code="limit_invalid"
             )
+
+        def _local_rows(db):
+            # 自选股优先：告警等工具按 Stock 表解析标的，AU 等市场不在
+            # 数据源清单内，本地行必须先于数据源结果返回。
+            needle = query.upper()
+            matched = []
+            for row in db.query(Stock).all():
+                symbol = str(row.symbol or "").strip()
+                name = str(row.name or "").strip()
+                upper = symbol.upper()
+                if needle == upper:
+                    tier = 0
+                elif upper.startswith(needle):
+                    tier = 1
+                elif query in name:
+                    tier = 2
+                elif needle in upper:
+                    tier = 3
+                else:
+                    continue
+                if market_value and str(row.market or "").upper() != market_value:
+                    continue
+                matched.append(
+                    (
+                        tier,
+                        len(symbol) or len(name),
+                        symbol,
+                        {"symbol": symbol, "name": name, "market": str(row.market or "")},
+                    )
+                )
+            matched.sort(key=lambda item: (item[0], item[1], item[2]))
+            return [item[3] for item in matched[:limit]]
+
+        try:
+            local_items = await run_db_operation(db_bind, _local_rows)
+        except Exception:  # noqa: BLE001 - 本地清单失败时回退到数据源结果
+            local_items = []
         try:
             items = await asyncio.to_thread(search_stocks, query, market_value, limit)
         except Exception:  # noqa: BLE001 - search providers become controlled results
-            return ToolResult.failure(
-                summary="股票搜索暂时不可用。", error_code="stock_search_unavailable"
+            if not local_items:
+                return ToolResult.failure(
+                    summary="股票搜索暂时不可用。", error_code="stock_search_unavailable"
+                )
+            items = []
+        seen = {
+            (str(item.get("market") or "").upper(), str(item.get("symbol") or "").upper())
+            for item in local_items
+        }
+        merged = list(local_items)
+        for item in items:
+            key = (
+                str(item.get("market") or "").upper(),
+                str(item.get("symbol") or "").upper(),
             )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+        items = merged[:limit]
         data = [
             {
                 "symbol": str(item.get("symbol") or ""),
