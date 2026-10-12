@@ -313,6 +313,65 @@ def test_market_discovery_tools_return_compact_read_only_data(monkeypatch):
     engine.dispose()
 
 
+def test_search_stocks_returns_locally_tracked_au_instruments(monkeypatch):
+    engine, session = _session()
+    session.add_all(
+        [
+            Stock(symbol="VGS", name="Vanguard All-World", market="AU"),
+            Stock(symbol="IVV", name="iShares Core S&P 500", market="AU"),
+        ]
+    )
+    session.commit()
+
+    def _provider_without_au(query, market_value, limit):
+        assert market_value == "AU"
+        return []
+
+    monkeypatch.setattr(assistant_tools, "search_stocks", _provider_without_au)
+
+    result = asyncio.run(
+        assistant_tools.build_panwatch_tool_registry(session).execute(
+            "search_stocks", _request(), {"query": "VGS", "market": "AU"}
+        )
+    )
+
+    assert result.ok is True
+    assert result.data["items"] == [
+        {"symbol": "VGS", "name": "Vanguard All-World", "market": "AU"}
+    ]
+    session.close()
+    engine.dispose()
+
+
+def test_search_stocks_puts_watchlist_rows_first_and_dedupes(monkeypatch):
+    engine, session = _session()
+    session.add(Stock(symbol="VGS", name="Vanguard All-World", market="AU"))
+    session.commit()
+
+    monkeypatch.setattr(
+        assistant_tools,
+        "search_stocks",
+        lambda query, market_value, limit: [
+            {"symbol": "VGS", "name": "VanEck GI Securities", "market": "US"},
+            {"symbol": "VGS", "name": "Vanguard All-World", "market": "AU"},
+        ],
+    )
+
+    result = asyncio.run(
+        assistant_tools.build_panwatch_tool_registry(session).execute(
+            "search_stocks", _request(), {"query": "VGS"}
+        )
+    )
+
+    assert result.ok is True
+    assert result.data["items"] == [
+        {"symbol": "VGS", "name": "Vanguard All-World", "market": "AU"},
+        {"symbol": "VGS", "name": "VanEck GI Securities", "market": "US"},
+    ]
+    session.close()
+    engine.dispose()
+
+
 def test_market_research_tools_use_marketdata_contracts(monkeypatch):
     from marketdata.types import CapitalFlow, DragonTigerItem, Fundamentals
 
