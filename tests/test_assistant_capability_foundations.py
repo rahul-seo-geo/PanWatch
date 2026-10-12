@@ -161,6 +161,16 @@ def test_condition_values_fail_closed(value):
         validate_condition_group({"op": "and", "items": [{"type": "volume_ratio", "op": ">", "value": value}]})
 
 
+def test_scalar_operator_unwraps_single_element_list_value():
+    group = validate_condition_group({"op": "and", "items": [{"type": "price", "op": "<=", "value": [50]}]})
+    assert group["items"][0]["value"] == 50
+
+
+def test_scalar_operator_rejects_multi_element_list_value():
+    with pytest.raises(ValueError):
+        validate_condition_group({"op": "and", "items": [{"type": "price", "op": "<=", "value": [50, 60]}]})
+
+
 def test_expiry_normalizes_timezone_to_sqlite_utc():
     assert parse_expire_at("2026-10-22T22:00:00+08:00") == datetime(2026, 10, 22, 14)
 
