@@ -25,14 +25,7 @@ Market routing needs no extra config: the engine resolves the market from the sy
 
 ## Ghostfolio sync (one-way)
 
-Pulls a Ghostfolio export and mirrors holdings into PanWatch accounts. Contract:
-
-- **One-way, read-only against Ghostfolio**: PanWatch never writes back; it only creates/updates/removes *its own* PanWatch accounts.
-- **Prefix-scoped**: PanWatch only manages accounts whose name starts with the configured prefix (default `GF: `); accounts outside the prefix are never touched. Removals happen only inside the prefix when Ghostfolio holdings disappear.
-- **Schedule**: cron (default `17 8 * * *`) registered through the same scheduler as other cron jobs, evaluated in the app timezone.
-- **Toggle**: `GHOSTFOLIO_ENABLED` env (default on) mounts/unmounts the module.
-- **API** (login required): `GET /api/ghostfolio/status`, `PUT /api/ghostfolio/config`, `POST /api/ghostfolio/sync/preview`, `POST /api/ghostfolio/sync`. The token is stored in PanWatch's DB and never echoed back by the status endpoint.
-- **Market mapping**: `.AX` → AU base symbol; `.HK` bases are zero-padded to 5 digits (`0700.HK` → `00700`); US fallback only applies to bare symbols when the holding's data source is Yahoo.
+Ghostfolio sync is now opt-in and fail-safe: personal deployments must set `GHOSTFOLIO_ENABLED=1` in the environment to enable it. See [Ghostfolio sync safety contract](GHOSTFOLIO-SYNC.md) for the full validation, ownership, and reconciliation contract.
 
 ## Calendar update policy
 
