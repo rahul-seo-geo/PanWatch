@@ -1,6 +1,12 @@
 from src.modules.automation.intraday_monitor import IntradayMonitorAgent
 
 
+def test_intraday_json_missing_label_uses_english_action() -> None:
+    agent = IntradayMonitorAgent()
+    assert agent._parse_suggestion('{"action":"hold"}')["action_label"] == "Hold"
+    assert agent._parse_suggestion('{"action":"watch","action_label":"unknown"}')["action_label"] == "Watch"
+
+
 def test_intraday_monitor_loose_json_parse_with_json_prefix() -> None:
     """盘中监控 — json 前缀宽松解析"""
     agent = IntradayMonitorAgent()
@@ -15,6 +21,6 @@ def test_intraday_monitor_parse_suggestion_accepts_non_standard_action() -> None
     agent = IntradayMonitorAgent()
     text = '\njson\n{"action":"build","action_label":"建仓","signal":"KDJ金叉","reason":"测试"}\n'
     result = agent._parse_suggestion(text)  # noqa: SLF001 - regression
-    assert result["action_label"] == "买入"
+    assert result["action_label"] == "Buy"
     assert result["action"] == "buy"
     assert result["signal"] == "KDJ金叉"

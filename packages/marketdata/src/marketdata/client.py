@@ -176,6 +176,14 @@ class MarketData:
         from marketdata.vendors.tencent import fetch_raw
         return fetch_raw(list(tencent_symbols)) if tencent_symbols else []
 
+    def yahoo_index_quotes(self, symbols: list[str]) -> list[dict]:
+        """Yahoo 原始指数符号直连，不经过个股市场识别。"""
+        from marketdata.vendors.yahoo_index import fetch_yahoo_index_quotes
+
+        sources = self.config.sources_for("quote", "AU")
+        proxy = next((source.config.get("proxy") for source in sources if source.config.get("proxy")), None)
+        return fetch_yahoo_index_quotes(symbols, proxy=proxy)
+
     def index_klines(self, code: str, *, market: str, days: int = 120) -> list:
         """指数日K:东财 secid 主源;失败/未映射(如美股指数)走腾讯原始符号兜底;都无 → []。
 

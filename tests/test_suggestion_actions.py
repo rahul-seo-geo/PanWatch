@@ -11,10 +11,10 @@ from sqlalchemy.orm import sessionmaker
 from src.modules.automation import suggestion_pool
 from src.modules.automation.agent_prediction_evaluation import group_prediction_outcomes
 from src.modules.automation.intraday_monitor import IntradayMonitorAgent
-from src.modules.automation.premarket_outlook import PremarketOutlookAgent
-from src.modules.automation.daily_report import DailyReportAgent
+from src.modules.automation.premarket_outlook import PremarketOutlookAgent, PREMARKET_ACTION_MAP
+from src.modules.automation.daily_report import DailyReportAgent, DAILY_ACTION_MAP
+from src.modules.research.signals.actions import ACTION_LABELS, ACTION_LABELS_EN, normalize_suggestion
 from src.modules.automation.tradingagents.operations import _compute_stats
-from src.modules.research.signals.actions import normalize_suggestion
 from src.platform.persistence.database import Base
 from src.platform.persistence.models import StockSuggestion
 
@@ -27,6 +27,71 @@ def pool(tmp_path, monkeypatch):
     monkeypatch.setattr(suggestion_pool, 'SessionLocal', factory)
     yield factory
     engine.dispose()
+
+
+@pytest.mark.parametrize('agent_type, action_map', [
+    (DailyReportAgent, DAILY_ACTION_MAP), (PremarketOutlookAgent, PREMARKET_ACTION_MAP),
+])
+@pytest.mark.parametrize('action', list(ACTION_LABELS))
+def test_bilingual_summary_labels(agent_type, action_map, action):
+    stock = SimpleNamespace(symbol='IVV', name='IVV', market='AU')
+    for label in (ACTION_LABELS[action], ACTION_LABELS_EN[action]):
+        assert action_map[label]['action'] == action
+        parsed = agent_type()._parse_suggestions(f'「IVV」{label}: reason', [stock])
+        assert parsed['IVV']['action'] == action
+        assert parsed['IVV']['reason'] == 'reason'
+        assert parsed['IVV']['action_label'] == label
+
+
+@pytest.mark.parametrize('agent_type, module, english_label', [
+    (DailyReportAgent, 'daily_report', 'Daily report'),
+    (PremarketOutlookAgent, 'premarket_outlook', 'Premarket outlook'),
+])
+@pytest.mark.parametrize('language', ['en-US', 'zh-CN'])
+def test_saved_suggestion_agent_label_follows_report_language(monkeypatch, agent_type, module, english_label, language):
+    from src.modules.automation import daily_report, premarket_outlook
+    from src.modules.automation.base import AgentContext
+    from src.platform.marketdata.models import MarketCode
+
+    agent_module = {'daily_report': daily_report, 'premarket_outlook': premarket_outlook}[module]
+    saved = Mock(return_value=True)
+    monkeypatch.setattr(agent_module, 'save_suggestion', saved)
+    monkeypatch.setattr(agent_module, 'save_analysis', Mock(return_value=True))
+    monkeypatch.setattr(agent_module, 'save_agent_context_run', Mock(return_value=True))
+    monkeypatch.setattr(agent_module, 'save_agent_prediction_outcome', Mock(return_value=True))
+    agent = agent_type()
+    monkeypatch.setattr(agent, 'build_prompt', lambda *_: ('system', 'prompt'))
+    stock = SimpleNamespace(symbol='IVV.AX', name='IVV', market=MarketCode.AU)
+    context = AgentContext(
+        ai_client=SimpleNamespace(chat=AsyncMock(return_value='「IVV.AX」Hold: reason')),
+        notifier=None, config=SimpleNamespace(watchlist=[stock]), report_language=language,
+    )
+
+    asyncio.run(agent.analyze(context, {'timestamp': '2026-10-12', 'signal_packs': {}}))
+
+    assert saved.call_count == 1
+    assert saved.call_args.kwargs['agent_label'] == (
+        english_label if language == 'en-US' else agent.display_name
+    )
+
+
+@pytest.mark.parametrize('agent_type', [DailyReportAgent, PremarketOutlookAgent])
+@pytest.mark.parametrize('symbol', ['IVV.AX', '00700.HK'])
+def test_summary_line_preserves_suffixed_symbol(agent_type, symbol):
+    stock = SimpleNamespace(symbol=symbol, name='Unrelated name', market='AU')
+    parsed = agent_type()._parse_suggestions(f'「{symbol.lower()}」Hold: reason', [stock])
+    assert parsed[symbol]['action'] == 'hold'
+    assert parsed[symbol]['action_label'] == 'Hold'
+    assert parsed[symbol]['reason'] == 'reason'
+
+
+@pytest.mark.parametrize('agent_type', [DailyReportAgent, PremarketOutlookAgent])
+def test_json_action_label_defaults_to_english(agent_type):
+    stock = SimpleNamespace(symbol='IVV', market='AU')
+    for missing_label in (None, 'unknown'):
+        item = {'symbol': 'IVV', 'action': 'hold', 'action_label': missing_label}
+        parsed = agent_type()._parse_suggestions_json({'suggestions': [item]}, [stock])
+        assert parsed['IVV']['action_label'] == 'Hold'
 
 
 @pytest.mark.parametrize(('action', 'label', 'expected'), [

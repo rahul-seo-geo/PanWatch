@@ -9,8 +9,9 @@ import math
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Any
+from types import SimpleNamespace
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from src.platform.marketdata.collectors.kline_collector import KlineCollector, kline_source
 from src.platform.marketdata.marketdata_client import md_quote_rows
@@ -395,31 +396,45 @@ class PriceAlertEngine:
     ) -> dict:
         bypass_market_hours = bool(bypass_market_hours and dry_run)
         now = _utc_now()
-        db = SessionLocal()
         if not dry_run:
             await asyncio.to_thread(self._persist_health, now, started=True)
         try:
-            query = db.query(PriceAlertRule).join(Stock).filter(PriceAlertRule.enabled == True)
-            if only_rule_id:
-                query = query.filter(PriceAlertRule.id == only_rule_id)
-            rules = query.all()
+            db = SessionLocal()
+            try:
+                query = db.query(PriceAlertRule).join(Stock).options(joinedload(PriceAlertRule.stock)).filter(PriceAlertRule.enabled == True)
+                if only_rule_id:
+                    query = query.filter(PriceAlertRule.id == only_rule_id)
+                rules = query.all()
+                if rules:
+                    # Apply the gate before any quote/K-line request.
+                    disabled_markets = disabled_optional_markets(db)
+                    gates = {
+                        r.id: (
+                            (False, "market_disabled")
+                            if r.stock.market in disabled_markets
+                            else (False, "capability_disabled")
+                            if not capability_enabled(db, r.stock.market, "alerts")
+                            else self._can_trigger(r, now, bypass_market_hours=bypass_market_hours)
+                        )
+                        for r in rules if r.stock is not None
+                    }
+                    rules = [
+                        SimpleNamespace(
+                            **{column.name: getattr(rule, column.name) for column in PriceAlertRule.__table__.columns},
+                            stock=SimpleNamespace(
+                                **{column.name: getattr(rule.stock, column.name) for column in Stock.__table__.columns}
+                            ) if rule.stock is not None else None,
+                        )
+                        for rule in rules
+                    ]
+            finally:
+                db.close()
+
             if not rules:
                 if not dry_run:
                     await asyncio.to_thread(self._persist_health, now)
                 return {"total_rules": 0, "triggered": 0, "skipped": 0, "items": []}
 
-            # Apply the gate before any quote/K-line request.
-            disabled_markets = disabled_optional_markets(db)
-            gates = {
-                r.id: (
-                    (False, "market_disabled")
-                    if r.stock.market in disabled_markets
-                    else (False, "capability_disabled")
-                    if not capability_enabled(db, r.stock.market, "alerts")
-                    else self._can_trigger(r, now, bypass_market_hours=bypass_market_hours)
-                )
-                for r in rules if r.stock is not None
-            }
             stocks = [r.stock for r in rules if r.stock is not None and gates[r.id][0]]
             try:
                 quote_map = await self._fetch_quotes_map(stocks)
@@ -525,8 +540,6 @@ class PriceAlertEngine:
             if not dry_run:
                 await asyncio.to_thread(self._persist_health, now, failed=True)
             raise
-        finally:
-            db.close()
 
 
 ENGINE = PriceAlertEngine()

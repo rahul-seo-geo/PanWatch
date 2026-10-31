@@ -9,7 +9,7 @@ from collections import Counter
 from datetime import datetime, date, timedelta
 from pathlib import Path
 
-from src.modules.research.signals.actions import ACTION_LABELS, normalize_suggestion
+from src.modules.research.signals.actions import ACTION_LABELS, ACTION_LABELS_EN, normalize_suggestion
 from src.modules.automation.base import BaseAgent, AgentContext, AnalysisResult
 from src.modules.research.signals import SignalPackBuilder
 from src.modules.research.analysis_history import save_analysis
@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 # 盘前建议类型映射
 PREMARKET_ACTION_MAP = {
     **{label: {"action": action, "label": label} for action, label in ACTION_LABELS.items()},
+    **{label: {"action": action, "label": label} for action, label in ACTION_LABELS_EN.items()},
     "准备建仓": {"action": "buy", "label": "准备建仓"},
     "准备加仓": {"action": "add", "label": "准备加仓"},
     "准备减仓": {"action": "reduce", "label": "准备减仓"},
@@ -513,8 +514,12 @@ class PremarketOutlookAgent(BaseAgent):
             if not action_text:
                 continue
 
-            m = re.search(r"[「【\[]\s*(?P<sym>[A-Za-z]{1,5}|\d{3,6})\s*[」】\]]", line)
-            sym_raw = m.group("sym") if m else ""
+            m = re.search(r"[「【\[]\s*(?P<sym>[^」】\]]+?)\s*[」】\]]", line)
+            bracket_sym = m.group("sym").strip() if m else ""
+            sym_raw = bracket_sym if bracket_sym.upper() in symbol_map else ""
+            if not sym_raw:
+                m = re.search(r"[「【\[]\s*(?P<sym>[A-Za-z]{1,5}|\d{3,6})\s*[」】\]]", line)
+                sym_raw = m.group("sym") if m else ""
 
             if not sym_raw:
                 m = re.search(r"\(\s*(?P<sym>[A-Za-z]{1,5}|\d{3,6})\s*\)", line)
@@ -603,7 +608,11 @@ class PremarketOutlookAgent(BaseAgent):
             if not canonical or canonical not in symbol_set:
                 continue
             action = (it.get("action") or "watch").strip()
-            action_label = (it.get("action_label") or "观望").strip()
+            action_label = (it.get("action_label") or "").strip()
+            if action_label not in PREMARKET_ACTION_MAP and action in ACTION_LABELS_EN:
+                action_label = ACTION_LABELS_EN[action]
+            elif not action_label:
+                action_label = ACTION_LABELS_EN["watch"]
             reason = (it.get("reason") or "").strip()
             signal = (it.get("signal") or "").strip()
             suggestions[canonical] = {
@@ -728,7 +737,7 @@ class PremarketOutlookAgent(BaseAgent):
                     signal=(sug.get("signal") or "") if isinstance(sug, dict) else "",
                     reason=sug.get("reason", ""),
                     agent_name=self.name,
-                    agent_label=self.display_name,
+                    agent_label=("Premarket outlook" if context.report_language == "en-US" else self.display_name),
                     expires_hours=12,  # 盘前建议当日有效
                     prompt_context=user_content,
                     ai_response=result.content,

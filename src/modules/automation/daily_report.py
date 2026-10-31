@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from src.modules.research.signals.actions import ACTION_LABELS, normalize_suggestion
+from src.modules.research.signals.actions import ACTION_LABELS, ACTION_LABELS_EN, normalize_suggestion
 from src.modules.automation.base import BaseAgent, AgentContext, AnalysisResult
 from src.modules.research.analysis_history import save_analysis
 from src.platform.marketdata.cn_symbol import get_cn_prefix
@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # 盘后建议类型映射
 DAILY_ACTION_MAP = {
     **{label: {"action": action, "label": label} for action, label in ACTION_LABELS.items()},
+    **{label: {"action": action, "label": label} for action, label in ACTION_LABELS_EN.items()},
     "继续持有": {"action": "hold", "label": "继续持有"},
     "考虑加仓": {"action": "add", "label": "考虑加仓"},
     "考虑减仓": {"action": "reduce", "label": "考虑减仓"},
@@ -40,6 +41,7 @@ PROMPT_PATH = Path(__file__).parent.parent.parent.parent / "prompts" / "daily_re
 
 # A 股大盘指数的显式腾讯符号（与 akshare_collector.CN_INDICES 口径一致）
 _CN_INDEX_TENCENT_SYMBOLS = ["sh000001", "sz399001", "sz399006"]
+_AU_INDEX_YAHOO = [("^AXJO", "S&P/ASX 200"), ("^AORD", "All Ordinaries"), ("^AXKO", "All Technology")]
 
 
 def get_market_data():
@@ -57,11 +59,33 @@ class DailyReportAgent(BaseAgent):
     description = "每日收盘后生成自选股日报，包含大盘概览、个股分析和明日关注"
 
     async def _fetch_index_for_market(self, market_code: MarketCode) -> list[IndexData]:
-        """按 market 取大盘指数。
-
-        直接走 marketdata 新包(index_quotes)。
-        与旧 _get_cn_index 口径一致：仅 CN 出数，其余市场返回空 list。
-        """
+        """按 market 取大盘指数；CN 走腾讯，AU 走 Yahoo。"""
+        if market_code == MarketCode.AU:
+            items = await asyncio.to_thread(
+                get_market_data().yahoo_index_quotes, [symbol for symbol, _ in _AU_INDEX_YAHOO]
+            )
+            names = dict(_AU_INDEX_YAHOO)
+            indices = []
+            for item in items:
+                try:
+                    symbol = item["symbol"]
+                    name = item.get("name") or names.get(symbol)
+                    if not symbol or not name or item.get("current_price") is None:
+                        raise ValueError("missing AU index symbol, name or price")
+                    indices.append(IndexData(
+                        symbol=symbol,
+                        name=name,
+                        market=MarketCode.AU,
+                        current_price=item["current_price"],
+                        change_pct=item.get("change_pct"),
+                        change_amount=item.get("change_amount"),
+                        volume=item.get("volume"),
+                        turnover=item.get("turnover"),
+                        timestamp=datetime.now(),
+                    ))
+                except (KeyError, TypeError, ValueError) as exc:
+                    logger.warning("跳过无效 AU 指数数据: %s", exc)
+            return indices
         if market_code != MarketCode.CN:
             return []
         items = await asyncio.to_thread(get_market_data().index_quotes, _CN_INDEX_TENCENT_SYMBOLS)
@@ -163,11 +187,12 @@ class DailyReportAgent(BaseAgent):
         for idx in data["indices"]:
             change_pct = safe_num(idx.change_pct)
             direction = "↑" if change_pct > 0 else "↓" if change_pct < 0 else "→"
-            lines.append(
-                f"- {idx.name}: {safe_num(idx.current_price):.2f} "
-                f"{direction} {change_pct:+.2f}% "
-                f"成交额:{safe_num(idx.turnover) / 1e8:.0f}亿"
-            )
+            line = f"- {idx.name}: {safe_num(idx.current_price):.2f} {direction} {change_pct:+.2f}%"
+            if idx.turnover:
+                line += f" 成交额:{safe_num(idx.turnover) / 1e8:.0f}亿"
+            elif idx.volume:
+                line += f" Volume:{idx.volume:,.0f}"
+            lines.append(line)
 
         # 自选股详情
         lines.append("\n## 自选股详情")
@@ -451,9 +476,13 @@ class DailyReportAgent(BaseAgent):
             if not action_text:
                 continue
 
-            # 1) 优先匹配「...」/【...】里的代码
-            m = re.search(r"[「【\[]\s*(?P<sym>[A-Za-z]{1,5}|\d{3,6})\s*[」】\]]", line)
-            sym_raw = m.group("sym") if m else ""
+            # 1) 优先匹配「...」/【...】里的完整代码（含市场后缀）
+            m = re.search(r"[「【\[]\s*(?P<sym>[^」】\]]+?)\s*[」】\]]", line)
+            bracket_sym = m.group("sym").strip() if m else ""
+            sym_raw = bracket_sym if bracket_sym.upper() in symbol_map else ""
+            if not sym_raw:
+                m = re.search(r"[「【\[]\s*(?P<sym>[A-Za-z]{1,5}|\d{3,6})\s*[」】\]]", line)
+                sym_raw = m.group("sym") if m else ""
 
             # 2) 再匹配括号里的代码（如 腾讯控股(00700)）
             if not sym_raw:
@@ -550,7 +579,11 @@ class DailyReportAgent(BaseAgent):
             if not canonical or canonical not in symbol_set:
                 continue
             action = (it.get("action") or "hold").strip()
-            action_label = (it.get("action_label") or "继续持有").strip()
+            action_label = (it.get("action_label") or "").strip()
+            if action_label not in DAILY_ACTION_MAP and action in ACTION_LABELS_EN:
+                action_label = ACTION_LABELS_EN[action]
+            elif not action_label:
+                action_label = ACTION_LABELS_EN["watch"]
             reason = (it.get("reason") or "").strip()
             signal = (it.get("signal") or "").strip()
 
@@ -647,7 +680,7 @@ class DailyReportAgent(BaseAgent):
                     signal=(sug.get("signal") or "") if isinstance(sug, dict) else "",
                     reason=sug.get("reason", ""),
                     agent_name=self.name,
-                    agent_label=self.display_name,
+                    agent_label=("Daily report" if context.report_language == "en-US" else self.display_name),
                     expires_hours=16,  # 盘后建议隔夜有效
                     prompt_context=user_content,
                     ai_response=result.content,

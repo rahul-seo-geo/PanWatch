@@ -545,7 +545,7 @@ class IntradayMonitorAgent(BaseAgent):
         """
         result = {
             "action": "watch",
-            "action_label": "观望",
+            "action_label": "Watch",
             "signal": "",
             "reason": "",
             "should_alert": False,
@@ -558,9 +558,10 @@ class IntradayMonitorAgent(BaseAgent):
             result["action"] = action
             result["attention_required"] = bool(obj.get("attention_required"))
             result["review_required"] = bool(obj.get("review_required"))
-            result["action_label"] = (
-                obj.get("action_label") or result["action_label"]
-            ).strip()[:20]
+            label = (obj.get("action_label") or "").strip()
+            if label not in ACTION_LABELS.values() and label not in ACTION_LABELS_EN.values():
+                label = ACTION_LABELS_EN.get(action, "Watch")
+            result["action_label"] = label[:20]
             result["signal"] = (obj.get("signal") or "").strip()[:60]
             result["reason"] = (obj.get("reason") or "").strip()[:160]
             result["should_alert"] = action in {

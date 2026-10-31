@@ -52,7 +52,7 @@ def normalize_suggestion(suggestion: dict, *, agent_name: str = "") -> dict:
 
     result.update(
         action=action,
-        action_label=ACTION_LABELS[action],
+        action_label=ACTION_LABELS_EN[action] if label in ACTION_LABELS_EN.values() else ACTION_LABELS[action],
         status="review" if review else "ready",
         review_required=review,
         attention_required=attention,
