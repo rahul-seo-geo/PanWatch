@@ -32,7 +32,7 @@ class MarketOption:
 
 OPTIONAL_MARKETS: dict[str, MarketOption] = {
     "AU": MarketOption(
-        default_enabled=False,
+        default_enabled=True,
         capabilities=frozenset({"quotes", "klines", "watchlist", "holdings"}),
     ),
 }
