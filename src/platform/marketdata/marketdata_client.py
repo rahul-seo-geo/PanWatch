@@ -110,6 +110,62 @@ def _quote_to_row(q: Quote) -> dict:
     }
 
 
+def _yahoo_au_quote_rows(symbols: list[str]) -> list[dict]:
+    """Yahoo v8 chart fallback for AU quotes.
+
+    The marketdata lib's quote vendors (tencent/eastmoney/sina/yfinance) have
+    no working AU path — yfinance isn't installed and the rest are CN/HK/US
+    only — so AU price alerts always came back no_quote. Stdlib-only, one
+    request per symbol; failures skip silently.
+    """
+    import json as _json
+    import urllib.request as _rq
+    from datetime import datetime as _dt, timezone as _tz
+
+    rows = []
+    for sym in symbols:
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}.AX?interval=1d&range=5d"
+            req = _rq.Request(url, headers={"User-Agent": "panwatch-quote-fallback/1.0"})
+            d = _json.loads(_rq.urlopen(req, timeout=10).read().decode("utf-8", "replace"))
+            res = (d.get("chart") or {}).get("result") or []
+            if not res:
+                continue
+            meta = res[0].get("meta", {})
+            price = meta.get("regularMarketPrice")
+            if price is None:
+                continue
+            prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+            now = _dt.now(_tz.utc)
+            rows.append({
+                "symbol": sym,
+                "name": meta.get("symbol", sym),
+                "market": "AU",
+                "current_price": price,
+                "change_pct": ((price - prev) / prev * 100) if prev else None,
+                "change_amount": (price - prev) if prev else None,
+                "prev_close": prev,
+                "open_price": meta.get("regularMarketOpen"),
+                "high_price": meta.get("regularMarketDayHigh"),
+                "low_price": meta.get("regularMarketDayLow"),
+                "volume": meta.get("regularMarketVolume"),
+                "turnover": None,
+                "turnover_rate": None,
+                "volume_ratio": None,
+                "pe_ratio": None,
+                "circulating_market_value": None,
+                "total_market_value": None,
+                "quote_date": now.date().isoformat(),
+                "source_timestamp": now.isoformat(),
+                "observed_at": now.isoformat(),
+                "source": "yahoo-fallback",
+                "currency": meta.get("currency", "AUD"),
+            })
+        except Exception:
+            continue
+    return rows
+
+
 def md_quote_rows(symbols: list[str], market: str) -> list[dict]:
     """批量报价,返回 list[dict](与旧 orchestrator 输出同形)。
 
@@ -121,7 +177,13 @@ def md_quote_rows(symbols: list[str], market: str) -> list[dict]:
     if _optional_market_disabled(market):
         return []
     quotes = get_market_data().quotes(syms, market=market)
-    return [_quote_to_row(q) for q in quotes]
+    rows = [_quote_to_row(q) for q in quotes]
+    if str(market).upper() == "AU":
+        have = {r.get("symbol") for r in rows}
+        missing = [s for s in syms if s not in have]
+        if missing:
+            rows.extend(_yahoo_au_quote_rows(missing))
+    return rows
 
 
 def _article_to_newsitem(a):
