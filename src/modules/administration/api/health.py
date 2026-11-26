@@ -23,3 +23,42 @@ async def selfcheck(
         return {"items": list_selfcheck_items()}
     key_list = [k for k in keys.split(",") if k] if keys else None
     return await run_selfcheck(notify_send=notify_send, keys=key_list)
+
+
+@router.get("/deep")
+async def deep_health():
+    """Deep liveness for the container HEALTHCHECK (unauthenticated).
+
+    Shallow /api/health stays 200 even when the agent scheduler registered
+    zero workflows (the 2026-11 AU-gating outage). This endpoint 503s when
+    the DB is unreachable OR the agent scheduler has no jobs, so Docker
+    marks the container unhealthy instead of silently serving.
+    """
+    from fastapi.responses import JSONResponse
+    from sqlalchemy import text as _text
+
+    from src.platform.persistence.database import SessionLocal
+
+    db_ok = False
+    try:
+        db = SessionLocal()
+        db.execute(_text("SELECT 1"))
+        db.close()
+        db_ok = True
+    except Exception:
+        pass
+
+    agent_jobs = -1
+    try:
+        from src.platform.scheduling import scheduler_registry
+
+        sched = scheduler_registry.get_all().get("agent")
+        agent_jobs = len(sched.get_jobs()) if sched is not None else 0
+    except Exception:
+        agent_jobs = -1
+
+    ok = db_ok and agent_jobs > 0
+    return JSONResponse(
+        {"ok": ok, "db": db_ok, "agent_jobs": agent_jobs},
+        status_code=200 if ok else 503,
+    )

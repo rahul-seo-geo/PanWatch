@@ -118,9 +118,10 @@ ENV TZ=Asia/Shanghai
 # 暴露端口（保持 8000 不变，避免影响存量用户升级）
 EXPOSE 8000
 
-# 健康检查（使用 Python）
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
+# 健康检查（使用 Python）— /api/health/deep also verifies the agent scheduler
+# has registered jobs, so a dead scheduler marks the container unhealthy.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/deep')" || exit 1
 
 # 启动命令
 CMD ["python", "server.py"]
