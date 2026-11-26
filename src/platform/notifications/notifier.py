@@ -301,14 +301,43 @@ class NotifierManager:
         if len(self._ap) > 0:
             apprise_ok = False
             last_err = ""
+            # Discord/webhook bodies cap at ~2000 chars and Apprise fails the
+            # whole send instead of chunking — daily_report (~4k chars) never
+            # delivered because of this. Split on paragraph boundaries; images
+            # ride the first chunk only.
+            max_body = 1900
+            chunks: list[str] = []
+            if len(plain_content) > max_body:
+                cur = ""
+                for para in plain_content.split("\n\n"):
+                    cand = f"{cur}\n\n{para}" if cur else para
+                    if len(cand) <= max_body:
+                        cur = cand
+                        continue
+                    if cur:
+                        chunks.append(cur)
+                    while len(para) > max_body:
+                        chunks.append(para[:max_body])
+                        para = para[max_body:]
+                    cur = para
+                if cur:
+                    chunks.append(cur)
+            else:
+                chunks = [plain_content]
             for attempt in range(0, retry_attempts + 1):
                 try:
-                    success = await self._ap.async_notify(
-                        title=title,
-                        body=plain_content,
-                        body_format=apprise.NotifyFormat.TEXT,
-                        attach=attachments,
-                    )
+                    success = True
+                    for idx, chunk in enumerate(chunks):
+                        part_title = title if len(chunks) == 1 else f"{title} ({idx + 1}/{len(chunks)})"
+                        ok = await self._ap.async_notify(
+                            title=part_title,
+                            body=chunk,
+                            body_format=apprise.NotifyFormat.TEXT,
+                            attach=attachments if idx == 0 else None,
+                        )
+                        if not ok:
+                            success = False
+                            break
                     if success:
                         apprise_ok = True
                         logger.info(f"Apprise 通知发送成功: {title}")
