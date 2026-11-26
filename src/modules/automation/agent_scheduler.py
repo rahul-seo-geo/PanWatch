@@ -181,7 +181,7 @@ class AgentScheduler:
                         agent_name=agent_name,
                         status="success",
                         result=result.content or "",
-                        error="",
+                        error=str(raw.get("notify_error") or ""),
                         duration_ms=duration_ms,
                         trace_id=trace_id,
                         trigger_source="schedule",
